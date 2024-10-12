@@ -1,0 +1,164 @@
+name: ghost
+help: Menus for downloading ghost blog posts to local disk
+aliases:
+- g
+actions:
+- name: admin
+  help: make a generic call to ghost admin
+  template: |
+    ruby -e "
+    require 'jwt'
+    require 'net/http'
+    require 'uri'
+    require 'json'
+
+    api_key = ENV['GHOST_ADMIN_API_KEY']
+    raise 'GHOST_ADMIN_API_KEY not set in environment variables' unless api_key
+
+    api_url = ENV['GHOST_API_URL']
+    raise 'GHOST_API_URL not set in environment variables' unless api_url
+
+    id, secret = api_key.split(':')
+
+    def generate_token(id, secret)
+      iat = Time.now.to_i
+
+      header = { alg: 'HS256', typ: 'JWT', kid: id }
+      payload = {
+        iat: iat,
+        exp: iat + 5 * 60,
+        aud: '/v4/admin/'
+      }
+
+      JWT.encode(payload, [secret].pack('H*'), 'HS256', header)
+    end
+
+    token = generate_token(id, secret)
+
+    headers = {
+      'Authorization' => \"Ghost #{token}\",
+      'Accept-Version' => 'v5.95',
+      'Content-Type' => 'application/json'
+    }
+
+    uri = URI(\"#{api_url}/ghost/api/v4/admin/{{.path}}{{if .param}}{{.param}}{{else}}{{end}}\")
+
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = (uri.scheme == 'https')
+
+    request = Net::HTTP::{{.method}}.new(uri, headers)
+
+    begin
+      request.body = STDIN.read unless request.method == 'GET'
+    rescue JSON::ParserError => e
+    end
+
+    response = http.request(request)
+
+    if response.code.to_i >= 200 && response.code.to_i < 300
+      puts response.body
+    else
+      STDERR.puts response.code
+      STDERR.puts response.body
+      STDERR.puts response['location']
+    end
+    "
+  params:
+  - name: path
+    help: url path
+    value: posts/
+  - name: method
+    help: http method
+    value: Get
+  - name: param
+    help: query parameter for get
+- name: content
+  help: make a generic call to ghost admin
+  template: |
+    ruby -e "
+    require 'jwt'
+    require 'net/http'
+    require 'uri'
+    require 'json'
+
+    api_key = ENV['GHOST_CONTENT_API_KEY']
+    raise 'GHOST_CONTENT_API_KEY not set in environment variables' unless api_key
+
+    api_url = ENV['GHOST_API_URL']
+    raise 'GHOST_API_URL not set in environment variables' unless api_url
+
+    headers = {
+      'Accept-Version' => 'v5.0',
+      'Content-Type' => 'application/json'
+    }
+
+    uri = URI(\"#{api_url}/ghost/api/content/{{.path}}?key=#{api_key}{{if .param}}{{.param}}{{else}}{{end}}\")
+
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = (uri.scheme == 'https')
+
+    request = Net::HTTP::{{.method}}.new(uri, headers)
+
+    begin
+      request.body = STDIN.read unless request.method == 'GET'
+    rescue JSON::ParserError => e
+    end
+
+    response = http.request(request)
+
+    if response.code.to_i >= 200 && response.code.to_i < 300
+      puts response.body
+    else
+      STDERR.puts response.code
+      STDERR.puts response.body
+      STDERR.puts response['location']
+    end
+    "
+  params:
+  - name: path
+    help: url path
+    value: posts/
+  - name: method
+    help: http method
+    value: Get
+  - name: param
+    help: query parameter for get
+- name: list
+  help: list posts
+  template: |
+    kwt ghost admin --param '?limit=all&fields=id,title' | ruby -e "
+      require 'json'
+      JSON.parse(STDIN.read)['posts'].each do |post|
+        puts \"#{post['id']} #{post['title']}\"
+      end
+    "
+- name: download
+  help: download post content
+  template: |
+    kwt ghost admin --path 'posts/{{.id}}/' | jq | tee .data/{{.id}}.json | ruby -e "
+      require 'json'
+      post = JSON.parse(STDIN.read)['posts'].first
+      lexical = JSON.parse(post['lexical'])
+      puts lexical['root']['children'][0]['markdown']
+    " > {{.id}}.md
+  params:
+  - name: id
+    help: the id of the post
+- name: update
+  help: update post content
+  template: |
+    ruby -e "
+      require 'json'
+      post = JSON.parse(File.read('.data/{{.id}}.json'))['posts'].first
+
+      lexical = JSON.parse(post['lexical'])
+      lexical['root']['children'][0] = { 'type': 'markdown', 'version': 1, 'markdown': File.read('{{.id}}.md') }
+      post['lexical'] = lexical.to_json
+
+      post = post.slice('lexical', 'updated_at')
+      puts({ posts: [post] }.to_json)
+    " | kwt ghost admin --method Put --path 'posts/{{.id}}/' | jq > .data/{{.id}}.new.json
+    mv .data/{{.id}}.new.json .data/{{.id}}.json
+  params:
+  - name: id
+    help: the id of the post
