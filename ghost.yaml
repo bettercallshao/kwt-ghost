@@ -139,11 +139,15 @@ actions:
       require 'json'
       post = JSON.parse(STDIN.read)['posts'].first
       lexical = JSON.parse(post['lexical'])
-      puts lexical['root']['children'][0]['markdown']
+      index = {{if .html}}1{{else}}0{{end}}
+      child = lexical['root']['children'][index]
+      puts child['markdown'] if child
     " > {{.id}}.md
   params:
   - name: id
     help: the id of the post
+  - name: html
+    help: assume a padding of html element is the first child and markdown content is the second child
 - name: update
   help: update post content
   template: |
@@ -152,7 +156,16 @@ actions:
       post = JSON.parse(File.read('.data/{{.id}}.json'))['posts'].first
 
       lexical = JSON.parse(post['lexical'])
-      lexical['root']['children'][0] = { 'type': 'markdown', 'version': 1, 'markdown': File.read('{{.id}}.md') }
+
+      {{if .html}}
+      index = 1
+      lexical['root']['children'][0] = { 'type': 'html', 'version': 1, 'html': File.read('{{.html}}.html'), 'visibility': { 'showOnEmail': true, 'showOnWeb': true, 'segment': '' } }
+
+      {{else}}
+      index = 0
+      {{end}}
+
+      lexical['root']['children'][index] = { 'type': 'markdown', 'version': 1, 'markdown': File.read('{{.id}}.md') }
       post['lexical'] = lexical.to_json
 
       post = post.slice('lexical', 'updated_at')
@@ -162,3 +175,5 @@ actions:
   params:
   - name: id
     help: the id of the post
+  - name: html
+    help: add a padding of html element from given file as the first child and markdown content as the second child
