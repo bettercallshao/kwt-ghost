@@ -148,6 +148,7 @@ actions:
     help: the id of the post
   - name: html
     help: assume a padding of html element is the first child and markdown content is the second child
+    value: header
 - name: update
   help: update post content
   template: |
@@ -177,3 +178,4 @@ actions:
     help: the id of the post
   - name: html
     help: add a padding of html element from given file as the first child and markdown content as the second child
+    value: header
