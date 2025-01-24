@@ -6,7 +6,6 @@ actions:
 - name: admin
   help: make a generic call to ghost admin
   template: |
-    mkdir -p .data/index
     ruby -e "
     require 'jwt'
     require 'net/http'
@@ -76,6 +75,7 @@ actions:
 - name: sync
   help: download all posts and tags
   template: |
+    mkdir -p .data/index
     kwt ghost admin -p tags/ --param '?limit=all&fields=id,slug' | jq > .data/index/tags.json
     kwt ghost admin --param '?limit=all&fields=id,title,slug,updated_at' | jq | tee .data/index/posts.json | ruby -e "
       require 'json'
