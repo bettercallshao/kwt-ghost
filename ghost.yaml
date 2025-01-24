@@ -203,12 +203,18 @@ actions:
         meta['tags'].include? tag['slug']
       end
 
+      post['slug'] = post['title'].downcase.gsub(/[^a-z0-9]+/, '-').gsub(/\A-+|-+\z/, '')
+
       payload = { posts: [post] }.to_json
       id = meta['id']
 
       File.write('/tmp/' + id, payload)
       %x(cat /tmp/#{id} | kwt ghost admin --method Put --path posts/#{id}/ | jq > .data/#{id}.json)
       %x(rm /tmp/#{id})
+
+      if post['slug'] != slug
+        %x(mv #{slug}.md #{post['slug']}.md)
+      end
     "
   params:
   - name: slug
