@@ -1,11 +1,12 @@
 name: ghost
-help: Menus for downloading ghost blog posts to local disk
+help: Menus for editing ghost blog posts to local disk. Requires GHOST_ADMIN_API_KEY and GHOST_API_URL.
 aliases:
 - g
 actions:
 - name: admin
   help: make a generic call to ghost admin
   template: |
+    mkdir -p .data/index
     ruby -e "
     require 'jwt'
     require 'net/http'
@@ -72,110 +73,143 @@ actions:
     value: Get
   - name: param
     help: query parameter for get
-- name: content
-  help: make a generic call to ghost admin
+- name: sync
+  help: download all posts and tags
   template: |
-    ruby -e "
-    require 'jwt'
-    require 'net/http'
-    require 'uri'
-    require 'json'
-
-    api_key = ENV['GHOST_CONTENT_API_KEY']
-    raise 'GHOST_CONTENT_API_KEY not set in environment variables' unless api_key
-
-    api_url = ENV['GHOST_API_URL']
-    raise 'GHOST_API_URL not set in environment variables' unless api_url
-
-    headers = {
-      'Accept-Version' => 'v5.0',
-      'Content-Type' => 'application/json'
-    }
-
-    uri = URI(\"#{api_url}/ghost/api/content/{{.path}}?key=#{api_key}{{if .param}}{{.param}}{{else}}{{end}}\")
-
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = (uri.scheme == 'https')
-
-    request = Net::HTTP::{{.method}}.new(uri, headers)
-
-    begin
-      request.body = STDIN.read unless request.method == 'GET'
-    rescue JSON::ParserError => e
-    end
-
-    response = http.request(request)
-
-    if response.code.to_i >= 200 && response.code.to_i < 300
-      puts response.body
-    else
-      STDERR.puts response.code
-      STDERR.puts response.body
-      STDERR.puts response['location']
-    end
-    "
-  params:
-  - name: path
-    help: url path
-    value: posts/
-  - name: method
-    help: http method
-    value: Get
-  - name: param
-    help: query parameter for get
+    kwt ghost admin -p tags/ --param '?limit=all&fields=id,slug' | jq > .data/index/tags.json
+    kwt ghost admin --param '?limit=all&fields=id,title,slug,updated_at' | jq | tee .data/index/posts.json | ruby -e "
+      require 'json'
+      posts = JSON.parse(STDIN.read)['posts']
+      posts.each do |post|
+        filename = \".data/#{post['id']}.json\"
+        if File.exist?(filename)
+          current = JSON.parse(File.read(filename))['posts'].first
+          if current['updated_at'] == post['updated_at']
+            next
+          end
+        end
+        puts post['id']
+      end
+    " | xargs -I{} sh -c "kwt ghost admin --path 'posts/{}/' | jq > .data/{}.json"
 - name: list
   help: list posts
   template: |
-    kwt ghost admin --param '?limit=all&fields=id,title' | ruby -e "
+    cat .data/index/posts.json | ruby -e "
       require 'json'
-      JSON.parse(STDIN.read)['posts'].each do |post|
-        puts \"#{post['id']} #{post['title']}\"
+      JSON.parse(STDIN.read)['posts'].sort_by do |post|
+        post['updated_at']
+      end.each do |post|
+        puts \"#{post['id']} #{post['slug']}\"
       end
     "
-- name: download
-  help: download post content
+- name: create
+  help: create a new post
   template: |
-    kwt ghost admin --path 'posts/{{.id}}/' | jq | tee .data/{{.id}}.json | ruby -e "
+    ruby -e "
       require 'json'
-      post = JSON.parse(STDIN.read)['posts'].first
-      lexical = JSON.parse(post['lexical'])
-      index = {{if .html}}1{{else}}0{{end}}
-      child = lexical['root']['children'][index]
-      puts child['markdown'] if child
-    " > {{.id}}.md
+      post = { 'title': '{{.title}}' }
+      puts({ posts: [post] }.to_json)
+    " | kwt ghost admin --method Post --path 'posts/' | jq | ruby -e "
+      require 'json'
+      content = STDIN.read
+      post = JSON.parse(content)['posts'].first
+      File.write(\".data/#{post['id']}.json\", content)
+      puts post['id']
+      puts post['slug']
+    "
   params:
-  - name: id
-    help: the id of the post
-  - name: html
-    help: assume a padding of html element is the first child and markdown content is the second child
-    value: header
-- name: update
+  - name: title
+    help: the title for the new article
+- name: checkout
+  help: checkout post as md
+  template: |
+    ruby -e "
+      require 'json'
+      slug = '{{.slug}}'
+      slug = slug.chomp('.md')
+
+      posts = JSON.parse(File.read('.data/index/posts.json'))['posts']
+      post = posts.find { |p| p['slug'] == slug }
+      if post.nil?
+        warn 'Post not found ' + slug
+        exit 1
+      end
+
+      id = post['id']
+      post = JSON.parse(File.read(\".data/#{id}.json\"))['posts'].first
+
+      filename = slug + '.md'
+      if File.exist?(filename)
+        warn 'File exists ' + filename
+        exit 1
+      end
+
+      lexical = JSON.parse(post['lexical'])
+      children = lexical['root']['children']
+      index = children.find_index do |child|
+        child['markdown']
+      end
+      content = index.nil? ? '' : children[index]['markdown']
+
+      tags = post['tags'].map {|t| t['slug']}.join(', ')
+
+      if content.start_with?('<!-- {')
+        content = content.lines[2..].joins
+      end
+
+      content = <<~TEXT
+        <!-- {id: #{post['id']}, title: #{post['title']}, index: #{index}, tags: [#{tags}]} -->
+
+        #{content}
+      TEXT
+
+      File.write(filename, content)
+    "
+  params:
+  - name: slug
+    help: the slug of the post
+- name: commit
   help: update post content
   template: |
     ruby -e "
       require 'json'
-      post = JSON.parse(File.read('.data/{{.id}}.json'))['posts'].first
+      require 'yaml'
+      slug = '{{.slug}}'
+      slug = slug.chomp('.md')
+      filename = slug + '.md'
+
+      unless File.exist?(filename)
+        warn 'File does not exist ' + filename
+        exit 1
+      end
+
+      content = File.read(filename)
+      comment = content.match(/<!--\s*(.*?)\s*-->/)
+      unless comment
+        warn 'File does not have metadata ' + filename
+        exit 1
+      end
+
+      meta = YAML.safe_load(comment[1])
+      post = JSON.parse(File.read(\".data/#{meta['id']}.json\"))['posts'].first.slice('lexical', 'updated_at')
 
       lexical = JSON.parse(post['lexical'])
-
-      {{if .html}}
-      index = 1
-      lexical['root']['children'][0] = { 'type': 'html', 'version': 1, 'html': File.read('{{.html}}.html'), 'visibility': { 'showOnEmail': true, 'showOnWeb': true, 'segment': '' } }
-
-      {{else}}
-      index = 0
-      {{end}}
-
-      lexical['root']['children'][index] = { 'type': 'markdown', 'version': 1, 'markdown': File.read('{{.id}}.md') }
+      lexical['root']['children'][meta['index'] || 0] = { 'type': 'markdown', 'version': 1, 'markdown': content }
       post['lexical'] = lexical.to_json
+      post['title'] = meta['title']
 
-      post = post.slice('lexical', 'updated_at')
-      puts({ posts: [post] }.to_json)
-    " | kwt ghost admin --method Put --path 'posts/{{.id}}/' | jq > .data/{{.id}}.new.json
-    mv .data/{{.id}}.new.json .data/{{.id}}.json
+      tags = JSON.parse(File.read('.data/index/tags.json'))['tags']
+      post['tags'] = tags.select do |tag|
+        meta['tags'].include? tag['slug']
+      end
+
+      payload = { posts: [post] }.to_json
+      id = meta['id']
+
+      File.write('/tmp/' + id, payload)
+      %x(cat /tmp/#{id} | kwt ghost admin --method Put --path posts/#{id}/ | jq > .data/#{id}.json)
+      %x(rm /tmp/#{id})
+    "
   params:
-  - name: id
-    help: the id of the post
-  - name: html
-    help: add a padding of html element from given file as the first child and markdown content as the second child
-    value: header
+  - name: slug
+    help: the slug of the post
