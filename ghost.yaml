@@ -88,7 +88,6 @@ actions:
     raise 'GHOST_API_URL not set in environment variables' unless api_url
 
     uri = URI(\"#{api_url}/ghost/api/content/{{.path}}?key=#{api_key}{{if .param}}&{{.param}}{{else}}{{end}}\")
-    puts uri
 
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = (uri.scheme == 'https')
@@ -113,7 +112,7 @@ actions:
 - name: posts
   help: list posts with podcast tag
   template: |
-    kwt ghost content --param 'limit=all&filter={{ urlquery .filter }}'
+    kwt ghost content --param 'limit=all&filter={{ urlquery .filter }}' | jq
   params:
   - name: filter
     help: filter for posts
