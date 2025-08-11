@@ -257,6 +257,10 @@ actions:
 
       post['slug'] = post['title'].downcase.gsub(/[^a-z0-9]+/, '-').gsub(/\A-+|-+\z/, '')
 
+      {{if .publish}}
+      post['status'] = 'published'
+      {{end}}
+
       payload = { posts: [post] }.to_json
       id = meta['id']
 
@@ -271,3 +275,5 @@ actions:
   params:
   - name: slug
     help: the slug of the post
+  - name: publish
+    help: publish the post
